@@ -4,7 +4,7 @@
 
 `mcc` runs multiple C / C++ compilers on a given set of C source file(s).
 
-For each source file, some combination of four C / C++ are run,
+For each source file, some combination of four C / C++ compilers are run,
 all with the same options.
 
 The compilers `mcc` knows about are:
@@ -46,7 +46,7 @@ mcc:
 
 Options beginning with `--mcc:` are reserved for specifying `mcc`
 behavior, and they are processed first.  The underlying compilers
-do not those options.
+do not see those options.
 
 ### mcc options
 
@@ -64,7 +64,7 @@ Show the underlying command lines that would be run.
 Then exit.
 
 ####
---cols=<colums>
+--cols=_colums_
 
 Set number of columns for purposes of determining how wide
 the report should be.  In particular, the headers, if any,
@@ -80,13 +80,14 @@ Just before running each compiler,
 print a header showing which compiler is being invoked.
 
 ####
---cpp-flags=s
+--cpp-flags=_flags_
 
 Append C preprocessor flags to the ones that are already specified
 on the command line.
 
 ####
---exclude=<pattern>
+--exclude=_pattern_
+
 Exclude certain source files.
 This is convenient, for example, when there are certain files
 that you know are troublesome, but it is awkward to play with
@@ -94,9 +95,9 @@ Makefile lists of C file or with shell filename generation, just
 to exclude some files.
 
 ####
---compilers=<compiler>
+--compilers=_compiler_
 
-Where <compiler> is a comma-separated list of compiler names.
+Where _compiler_ is a comma-separated list of compiler names.
 This option can be given more than once on the command line.
 
 The list of valid compiler names is:
