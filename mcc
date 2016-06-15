@@ -1,0 +1,310 @@
+#! /usr/bin/perl -w
+    eval 'exec /usr/bin/perl -S $0 ${1+"$@"}'
+        if 0; #$running_under_some_shell
+
+# Filename: mcc
+# Brief: Run multiple C / C++ compilers on the same C source file(s).
+# Copyright (C) 2016 Guy Shaw
+# Written by Guy Shaw <gshaw@acm.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as
+# published by the Free Software Foundation; either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+=pod
+
+=begin description
+
+Run multiple C / C++ compilers on the same C source file(s).
+
+Purpose:
+  1) Ensure that C code builds clean using both gcc and clang.
+
+  2) Sometimes, it is a goal to write code in a subset C
+     that is also a subset of legal C++.
+     Ensure that the C source code build without diagnostics
+     using gcc and g++ and clang and clang++.
+
+=end description
+
+=cut
+
+require 5.0;
+use strict;
+use warnings;
+use Carp;
+use diagnostics;
+use Getopt::Long;
+use File::Spec::Functions qw(splitpath);
+use Cwd qw(getcwd);             # Needed at least for explain_cwd()
+
+my $eprint_fh;
+my $dprint_fh;
+
+my $debug    = 0;
+my $verbose  = 0;
+my $simulate = 0;
+my $headers  = 0;
+my $cols     = 0;
+
+my @mcc_argv = ();
+my @cpp_flags = ();
+my @cflags = ();
+my @exclude_files = ();
+my @known_compilers_list = ( 'gcc', 'clang', 'g++', 'clang++' );
+my %known_compilers;
+my @compilers = ();
+
+my @options = (
+    'debug'        => \$debug,
+    'verbose'      => \$verbose,
+    'simulate'     => \$simulate,
+    'cols=i'       => \$cols,
+    'headers'      => \$headers,
+    'cpp-flags=s'  => \@cpp_flags,
+    'exclude=s'    => \@exclude_files,
+    'compilers=s'  => \@compilers,
+);
+
+#:subroutines:#
+
+# Decide how to direct eprint*() and dprint*() functions.
+# If STDOUT and STDERR are directed to the same "channel",
+# then eprint*() and dprint*() should be tied to the same file handle.
+#
+# Otherwise, buffering could cause a mix of STDOUT and STDERR to
+# be written out of order.
+#
+sub set_print_fh {
+    my @stdout_statv;
+    my @stderr_statv;
+    my $stdout_chan;
+    my $stderr_chan;
+
+    @stdout_statv = stat(*STDOUT);
+    @stderr_statv = stat(*STDERR);
+    $stdout_chan = join(':', @stdout_statv[0, 1, 6]);
+    $stderr_chan = join(':', @stderr_statv[0, 1, 6]);
+    if (!defined($eprint_fh)) {
+        $eprint_fh = ($stderr_chan eq $stdout_chan) ? *STDOUT : *STDERR;
+    }
+    if (!defined($dprint_fh)) {
+        $dprint_fh = ($stderr_chan eq $stdout_chan) ? *STDOUT : *STDERR;
+    }
+}
+
+sub eprint {
+    if (-t $eprint_fh) {
+        print {$eprint_fh} "\e[01;31m\e[K", @_, "\e[m\e[K";
+    }
+    else {
+        print {$eprint_fh} @_;
+    }
+}
+
+sub eprintf {
+    if (-t $eprint_fh) {
+        print  {$eprint_fh}  "\e[01;31m\e[K";
+        printf {$eprint_fh} @_;
+        print  {$eprint_fh}  "\e[m\e[K";
+    }
+    else {
+        printf {$eprint_fh} @_;
+    }
+}
+
+sub dprint {
+    print {$dprint_fh} @_ if ($debug);
+}
+
+sub dprintf {
+    printf {$dprint_fh} @_ if ($debug);
+}
+
+sub is_excluded {
+    my ($fname) = @_;
+
+    for my $xfname (@exclude_files) {
+        if ($fname eq $xfname) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+sub print_separator {
+    my ($label) = @_;
+    my $h1 = '=' x $cols;
+    my $h2 = '=' . (' ' x ($cols - 2)) . '=';
+    my $h3 = $h1;
+    substr($h2, $cols/2 - length($label)/2, length($label)) = $label;
+
+    print $h1, "\n";
+    print $h2, "\n";
+    print $h3, "\n";
+}
+
+sub run_compiler {
+    my $cmd = $_[0];
+    my $have_src_fname = 0;
+
+    print_separator($cmd) if ($headers);
+
+    my $src_fname = pop(@_);
+    my @cmdv = ();
+    for (@_) {
+        if ($_ eq '__OBJECT__') {
+            my $obj_fname;
+            $obj_fname = $src_fname;
+            $obj_fname =~ s{\.[a-z]+\z}{.o}msx;
+            if ($obj_fname !~ m{\.o\z}msx) {
+                eprint "Could not make object filename from '${src_fname}'.\n";
+                return;
+            }
+            push(@cmdv, $obj_fname);
+        }
+        elsif ($_ eq '__C__') {
+            push(@cmdv, $src_fname);
+            $have_src_fname = 1;
+        }
+        else {
+            push(@cmdv, $_);
+        }
+    }
+
+    if (!$have_src_fname) {
+        push(@cmdv, $src_fname);
+    }
+
+    if ($verbose || $simulate) {
+        print '+ ', join(' ', @cmdv), "\n";
+    }
+
+    if (!$simulate) {
+        system(@cmdv);
+    }
+}
+
+sub mcc_file {
+    my ($src_fname) = @_;
+  
+    my ($vol, $dir, $sfn) = splitpath($src_fname);
+    my ($stem, $ext) = $sfn =~ m{\A(.*)\.(\w+)\z}msx;
+    my $src_cc_fname; 
+    my $obj_fname;
+
+    if ($ext eq 'c') {
+        $src_cc_fname = $src_fname . 'c';
+        ( $obj_fname = $src_fname ) =~ s{\.c}{.o}msx;
+    }
+    else {
+        $src_cc_fname = $src_fname;
+    }
+    next unless ($ext eq 'c' or $ext eq 'cc');
+    dprint "    src_fname=[${src_fname}]\n";
+    dprint "        sfn=[${sfn}]\n";
+    dprint "        ext=[${ext}]\n";
+
+    for my $cc (@compilers) {
+        if ($cc eq 'gcc') {
+            run_compiler('gcc',     @cpp_flags, @cflags, $src_fname);
+        }
+        elsif ($cc eq 'clang') {
+            run_compiler('clang',   @cpp_flags, @cflags, $src_fname);
+        }
+        elsif ($cc eq 'g++') {
+            run_compiler('g++',     @cpp_flags, @cflags, $src_fname);
+        }
+        elsif ($cc eq 'clang++') {
+            if ($ext eq 'c' && ! -e $src_cc_fname) {
+                symlink($src_fname, $src_cc_fname);
+                run_compiler('clang++', @cpp_flags, @cflags, $src_cc_fname);
+                unlink($src_cc_fname);
+            }
+            else {
+                run_compiler('clang++', @cpp_flags, @cflags, $src_fname);
+            }
+        }
+        else {
+            eprint "*** Bad compiler, $cc.\n";
+            exit(64);
+        }
+    }
+}
+
+#:options:#
+
+set_print_fh();
+
+if ($cols == 0) {
+    my $envcols = $ENV{'COLUMNS'};
+
+    if (defined($envcols)) {
+        $cols = $envcols;
+    }
+}
+
+if ($cols == 0) {
+    if (-t STDOUT) {
+        $cols = qx(tput cols);
+    }
+}
+
+if ($cols == 0) {
+    $cols = 80;
+}
+
+while (scalar(@ARGV)) {
+    my $arg = $ARGV[0];
+    if ($arg eq '--') {
+        shift;
+        last;
+    }
+    last if ($arg =~ m{\.(?:c|cc|h|hh)\z}msx);
+    if ($arg =~ m{\A--mcc:(.*)\z}msx) {
+        push(@mcc_argv, '--' . $1);
+    }
+    else {
+        push(@cflags, $arg);
+    }
+    shift;
+}
+
+@ARGV = ( @mcc_argv, @ARGV );
+
+GetOptions(@options) or exit 2;
+
+if (scalar(@compilers) >= 1) {
+    %known_compilers = map { ( $_, 1 ) } @known_compilers_list;
+    for my $cc_arg (@compilers) {
+        for my $cc (split(/,/, $cc_arg)) {
+            if (!defined($known_compilers{$cc})) {
+                eprint "Unknown compiler, '${cc}'.\n";
+                eprint "Known compilers are:\n";
+                eprint '    ', join(' ', @known_compilers_list), "\n";
+                exit(2);
+            }
+        }
+    }
+}
+else {
+    @compilers = @known_compilers_list;
+}
+
+#:main:#
+
+for my $src_fname (@ARGV) {
+    next if (is_excluded($src_fname));
+    mcc_file($src_fname);
+}
+
+exit 0;
