@@ -59,6 +59,7 @@ my $cols     = 0;
 my @mcc_argv = ();
 my @cpp_flags = ();
 my @cflags = ();
+my @cxx_flags = ();
 my @exclude_files = ();
 my @known_compilers_list = ( 'gcc', 'clang', 'g++', 'clang++' );
 my %known_compilers;
@@ -196,10 +197,10 @@ sub run_compiler {
 
 sub mcc_file {
     my ($src_fname) = @_;
-  
+
     my ($vol, $dir, $sfn) = splitpath($src_fname);
     my ($stem, $ext) = $sfn =~ m{\A(.*)\.(\w+)\z}msx;
-    my $src_cc_fname; 
+    my $src_cc_fname;
     my $obj_fname;
 
     if ($ext eq 'c') {
@@ -222,16 +223,16 @@ sub mcc_file {
             run_compiler('clang',   @cpp_flags, @cflags, $src_fname);
         }
         elsif ($cc eq 'g++') {
-            run_compiler('g++',     @cpp_flags, @cflags, $src_fname);
+            run_compiler('g++',     @cpp_flags, @cxx_flags, $src_fname);
         }
         elsif ($cc eq 'clang++') {
             if ($ext eq 'c' && ! -e $src_cc_fname) {
                 symlink($src_fname, $src_cc_fname);
-                run_compiler('clang++', @cpp_flags, @cflags, $src_cc_fname);
+                run_compiler('clang++', @cpp_flags, @cxx_flags, $src_cc_fname);
                 unlink($src_cc_fname);
             }
             else {
-                run_compiler('clang++', @cpp_flags, @cflags, $src_fname);
+                run_compiler('clang++', @cpp_flags, @cxx_flags, $src_fname);
             }
         }
         else {
@@ -263,6 +264,10 @@ if ($cols == 0) {
     $cols = 80;
 }
 
+my %c_only_options = (
+    '-std=c99' => 1,
+);
+
 while (scalar(@ARGV)) {
     my $arg = $ARGV[0];
     if ($arg eq '--') {
@@ -275,11 +280,32 @@ while (scalar(@ARGV)) {
     }
     else {
         push(@cflags, $arg);
+        if (!defined($c_only_options{$arg})) {
+            push(@cxx_flags, $arg);
+        }
     }
     shift;
 }
 
 @ARGV = ( @mcc_argv, @ARGV );
+
+if ($debug) {
+    eprint "ARGV:\n";
+    for (@ARGV) {
+        eprintf "  [%s]\n", $_;
+    }
+
+    eprint "cflags:\n";
+    for (@cflags) {
+        eprintf "  [%s]\n", $_;
+    }
+
+    eprint "cxx_flags:\n";
+    for (@cxx_flags) {
+        eprintf "  [%s]\n", $_;
+    }
+}
+
 
 GetOptions(@options) or exit 2;
 
