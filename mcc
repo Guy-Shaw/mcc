@@ -31,7 +31,7 @@ Purpose:
 
   2) Sometimes, it is a goal to write code in a subset C
      that is also a subset of legal C++.
-     Ensure that the C source code build without diagnostics
+     Ensure that the C source code builds without diagnostics
      using gcc and g++ and clang and clang++.
 
 =end description
@@ -51,6 +51,7 @@ my $eprint_fh;
 my $dprint_fh;
 
 my $debug    = 0;
+my $lower    = 0;
 my $verbose  = 0;
 my $simulate = 0;
 my $headers  = 0;
@@ -67,6 +68,7 @@ my @compilers = ();
 
 my @options = (
     'debug'        => \$debug,
+    'lower'        => \$lower,
     'verbose'      => \$verbose,
     'simulate'     => \$simulate,
     'cols=i'       => \$cols,
@@ -75,6 +77,8 @@ my @options = (
     'exclude=s'    => \@exclude_files,
     'compilers=s'  => \@compilers,
 );
+
+my $any_change = 0;
 
 #:subroutines:#
 
@@ -103,6 +107,8 @@ sub set_print_fh {
     }
 }
 
+# print/printf to stderr.  Mark as error message, using color or highlight.
+#
 sub eprint {
     if (-t $eprint_fh) {
         print {$eprint_fh} "\e[01;31m\e[K", @_, "\e[m\e[K";
@@ -123,12 +129,54 @@ sub eprintf {
     }
 }
 
+# print/printf to same fd as stderr, but information only.
+# Do not mark, or color or highlight in any way.
+#
+sub ieprint {
+    print  {$eprint_fh} @_;
+}
+
+sub ieprintf {
+    printf {$eprint_fh} @_;
+}
+
+sub vprint {
+    print @_ if ($verbose);
+}
+
+sub vprintf {
+    printf @_ if ($verbose);
+}
+
+# print/prinf to same fd as stderr, like ieprint/ieprintf, but only if --verbose
+#
+sub veprint {
+    print  {$eprint_fh} @_ if ($verbose);
+}
+
+sub veprintf {
+    printf {$eprint_fh} @_ if ($verbose);
+}
+
+# print/printf to dprint_fh only if --debug
+# dprint_fh may or may not be the same as eprint_fh,
+# which may or may not be stderr.
+#
 sub dprint {
     print {$dprint_fh} @_ if ($debug);
 }
 
 sub dprintf {
     printf {$dprint_fh} @_ if ($debug);
+}
+
+sub err_exit {
+    my ($xcode) = @_;
+
+    if ($any_change == 0) {
+        ieprint "Nothing done.\n";
+    }
+    exit $xcode;
 }
 
 sub is_excluded {
@@ -186,7 +234,7 @@ sub run_compiler {
         push(@cmdv, $src_fname);
     }
 
-    if ($verbose || $simulate) {
+    if ($verbose || $simulate || $lower) {
         print '+ ', join(' ', @cmdv), "\n";
     }
 
@@ -268,20 +316,48 @@ my %c_only_options = (
     '-std=c99' => 1,
 );
 
+# Extract mcc-specific options before doing the normal option processing.
+# Before doing normal option processing using GetOptions(),
+# collect leading options of the form --mcc:* in a separate array,
+# and remove them from @ARGV.
+#
+# We stop looking for mcc-options as soon as we encounter either
+# '--', or somthing looks like a filename.  So, order does matter.
+# After the scan for mcc-options stops, then anything after that
+# does not count as an mcc-option, even if it would otherwise look like one.
+#
+# It is a common case that options to be passed to compilers can
+# come from substitution of variable inside shell scripts or Makefiles,
+# and so they may very well be multiple options, separated by whitespace,
+# all in one command-line argument.  So, any arguments that are not
+# already handled as a special case, arguments are split on whitespace,
+# and the result treated as possible multiple arguments.
+#
+# The option, '--debug' is treated as a special case, because
+# we want to able to turn on debugging about the option parsing, itself,
+# and that means optionally showing information before we even call
+# GetOptions().
+
 while (scalar(@ARGV)) {
     my $arg = $ARGV[0];
     if ($arg eq '--') {
         shift;
         last;
     }
-    last if ($arg =~ m{\.(?:c|cc|h|hh)\z}msx);
+    last if ($arg !~ m{\A-}msx && $arg =~ m{\.(?:c|cc|h|hh)\z}msx);
     if ($arg =~ m{\A--mcc:(.*)\z}msx) {
         push(@mcc_argv, '--' . $1);
     }
+    elsif ($arg eq '--debug') {
+        $debug = 1;
+    }
     else {
-        push(@cflags, $arg);
-        if (!defined($c_only_options{$arg})) {
-            push(@cxx_flags, $arg);
+        my @optv = split(/\s+/, $arg);
+        push(@cflags, @optv);
+        for my $opt (@optv) {
+            if (!defined($c_only_options{$opt})) {
+                push(@cxx_flags, $opt);
+            }
         }
     }
     shift;
@@ -290,22 +366,23 @@ while (scalar(@ARGV)) {
 @ARGV = ( @mcc_argv, @ARGV );
 
 if ($debug) {
+    # Show how the first pass has split @ARGV
+    # into { mcc-options , normal options }
     eprint "ARGV:\n";
     for (@ARGV) {
-        eprintf "  [%s]\n", $_;
+        ieprintf "  [%s]\n", $_;
     }
 
     eprint "cflags:\n";
     for (@cflags) {
-        eprintf "  [%s]\n", $_;
+        ieprintf "  [%s]\n", $_;
     }
 
     eprint "cxx_flags:\n";
     for (@cxx_flags) {
-        eprintf "  [%s]\n", $_;
+        ieprintf "  [%s]\n", $_;
     }
 }
-
 
 GetOptions(@options) or exit 2;
 
