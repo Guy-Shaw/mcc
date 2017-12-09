@@ -18,9 +18,9 @@ The compilers `mcc` knows about are:
 Sometimes the goal is to just make sure C code builds clean
 using both gcc and clang.  Or C++ code builds with g++ and clang++.
 
-But there are times when the goal is to write code in a subset C
-that is also a subset of legal C++.  In that case,
-you want to run all 4 compilers.
+But there are times when the goal is to write code
+in a subset of C that is also a subset of legal C++.
+In that case, you want to run all 4 compilers.
 
 ### Typical use
 
